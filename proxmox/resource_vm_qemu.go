@@ -662,41 +662,22 @@ func prepareDiskSize(
 	for diskID, diskConf := range diskConfMap {
 		diskName := fmt.Sprintf("%v%v", diskConf["type"], diskID)
 
-		diskSize := diskSizeGB(diskConf["size"])
-
 		if _, diskExists := clonedConfig.QemuDisks[diskID]; !diskExists {
-			return err
+			return fmt.Errorf("Disk %s not present in current configuration.", diskName)
 		}
 
-		clonedDiskSize := diskSizeGB(clonedConfig.QemuDisks[diskID]["size"])
-
-		if err != nil {
-			return err
-		}
+		diskSize := convertDiskSize(diskConf["size"])
+		clonedDiskSize := convertDiskSize(clonedConfig.QemuDisks[diskID]["size"])
 
 		diffSize := int(math.Ceil(diskSize - clonedDiskSize))
-		if diskSize > clonedDiskSize {
-			log.Print("[DEBUG] resizing disk " + diskName)
-			_, err = client.ResizeQemuDisk(vmr, diskName, diffSize)
-			if err != nil {
+		if diffSize > 0 {
+			log.Printf("[DEBUG] resizing disk %s (+%dGB)", diskName, diffSize)
+			if _, err = client.ResizeQemuDisk(vmr, diskName, diffSize); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
-}
-
-func diskSizeGB(dcSize interface{}) float64 {
-	var diskSize float64
-	// TODO support other units M/G/K
-	switch dcSize.(type) {
-	case string:
-		diskSizeGB := dcSize.(string)
-		diskSize, _ = strconv.ParseFloat(strings.Trim(diskSizeGB, "G"), 64)
-	case float64:
-		diskSize = dcSize.(float64)
-	}
-	return diskSize
 }
 
 // Converting from schema.TypeSet to map of id and conf for each device,
