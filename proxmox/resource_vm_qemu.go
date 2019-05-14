@@ -189,6 +189,11 @@ func resourceVmQemu() *schema.Resource {
 					},
 				},
 			},
+			"scsi_hardware": &schema.Schema{
+				Type:     schema.TypeString,
+				Optional: true,
+				Default:  "lsi",
+			},
 			// Deprecated single disk config.
 			"disk_gb": {
 				Type:       schema.TypeFloat,
@@ -349,15 +354,16 @@ func resourceVmQemuCreate(d *schema.ResourceData, meta interface{}) error {
 	qemuDisks := devicesSetToMap(disks)
 
 	config := pxapi.ConfigQemu{
-		Name:         vmName,
-		Description:  d.Get("desc").(string),
-		Onboot:       d.Get("onboot").(bool),
-		Memory:       d.Get("memory").(int),
-		QemuCores:    d.Get("cores").(int),
-		QemuSockets:  d.Get("sockets").(int),
-		QemuOs:       d.Get("qemu_os").(string),
-		QemuNetworks: qemuNetworks,
-		QemuDisks:    qemuDisks,
+		Name:             vmName,
+		Description:      d.Get("desc").(string),
+		Onboot:           d.Get("onboot").(bool),
+		Memory:           d.Get("memory").(int),
+		QemuCores:        d.Get("cores").(int),
+		QemuSockets:      d.Get("sockets").(int),
+		QemuOs:           d.Get("qemu_os").(string),
+		QemuNetworks:     qemuNetworks,
+		QemuDisks:        qemuDisks,
+		QemuScsiHardware: d.Get("scsi_hardware").(string),
 		// Cloud-init.
 		CIuser:       d.Get("ciuser").(string),
 		CIpassword:   d.Get("cipassword").(string),
@@ -499,15 +505,16 @@ func resourceVmQemuUpdate(d *schema.ResourceData, meta interface{}) error {
 	qemuNetworks := devicesSetToMap(configNetworksSet)
 
 	config := pxapi.ConfigQemu{
-		Name:         d.Get("name").(string),
-		Description:  d.Get("desc").(string),
-		Onboot:       d.Get("onboot").(bool),
-		Memory:       d.Get("memory").(int),
-		QemuCores:    d.Get("cores").(int),
-		QemuSockets:  d.Get("sockets").(int),
-		QemuOs:       d.Get("qemu_os").(string),
-		QemuNetworks: qemuNetworks,
-		QemuDisks:    qemuDisks,
+		Name:             d.Get("name").(string),
+		Description:      d.Get("desc").(string),
+		Onboot:           d.Get("onboot").(bool),
+		Memory:           d.Get("memory").(int),
+		QemuCores:        d.Get("cores").(int),
+		QemuSockets:      d.Get("sockets").(int),
+		QemuOs:           d.Get("qemu_os").(string),
+		QemuNetworks:     qemuNetworks,
+		QemuDisks:        qemuDisks,
+		QemuScsiHardware: d.Get("scsi_hardware").(string),
 		// Cloud-init.
 		CIuser:       d.Get("ciuser").(string),
 		CIpassword:   d.Get("cipassword").(string),
