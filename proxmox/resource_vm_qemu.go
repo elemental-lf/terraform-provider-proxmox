@@ -158,7 +158,7 @@ func resourceVmQemu() *schema.Resource {
 							Description: "One of PVE types as described: https://pve.proxmox.com/wiki/Storage",
 						},
 						"size": &schema.Schema{
-							Type:     schema.TypeFloat,
+							Type:     schema.TypeString,
 							Required: true,
 						},
 						"format": &schema.Schema{
@@ -425,7 +425,7 @@ func resourceVmQemuCreate(d *schema.ResourceData, meta interface{}) error {
 			// give sometime to proxmox to catchup
 			time.Sleep(5 * time.Second)
 
-			err = prepareDiskSize(client, vmr, qemuDisks)
+			err = resizeDisks(client, vmr, qemuDisks)
 			if err != nil {
 				pmParallelEnd(pconf)
 				return err
@@ -455,7 +455,7 @@ func resourceVmQemuCreate(d *schema.ResourceData, meta interface{}) error {
 		// give sometime to proxmox to catchup
 		time.Sleep(5 * time.Second)
 
-		err = prepareDiskSize(client, vmr, qemuDisks)
+		err = resizeDisks(client, vmr, qemuDisks)
 		if err != nil {
 			pmParallelEnd(pconf)
 			return err
@@ -543,7 +543,7 @@ func resourceVmQemuUpdate(d *schema.ResourceData, meta interface{}) error {
 	// give sometime to proxmox to catchup
 	time.Sleep(5 * time.Second)
 
-	prepareDiskSize(client, vmr, qemuDisks)
+	resizeDisks(client, vmr, qemuDisks)
 
 	// give sometime to proxmox to catchup
 	time.Sleep(5 * time.Second)
@@ -656,7 +656,7 @@ func resourceVmQemuDelete(d *schema.ResourceData, meta interface{}) error {
 }
 
 // Increase disk size if original disk was smaller than new disk.
-func prepareDiskSize(
+func resizeDisks(
 	client *pxapi.Client,
 	vmr *pxapi.VmRef,
 	diskConfMap pxapi.QemuDevices,
