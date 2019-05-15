@@ -611,11 +611,11 @@ func resourceVmQemuRead(d *schema.ResourceData, meta interface{}) error {
 	d.Set("agent", config.Agent)
 	// Disks.
 	configDisksSet := d.Get("disk").(*schema.Set)
-	activeDisksSet := updateDisksSet(configDisksSet, config.QemuDisks)
+	activeDisksSet := updateDevicesSet(configDisksSet, config.QemuDisks)
 	d.Set("disk", activeDisksSet)
 	// Networks.
 	configNetworksSet := d.Get("network").(*schema.Set)
-	activeNetworksSet := updateNetworksSet(configNetworksSet, config.QemuNetworks)
+	activeNetworksSet := updateDevicesSet(configNetworksSet, config.QemuNetworks)
 	d.Set("network", activeNetworksSet)
 	// Deprecated single disk config.
 	d.Set("storage", config.Storage)
@@ -730,37 +730,9 @@ func convertDiskSize(value interface{}) float64 {
 	}
 }
 
-func genericTypeConversion(setConfMap map[string]interface{}, key string, value interface{}) {
-
-	switch value.(type) {
-	// proxmox-api-go returns all device values as strings so convert them to the right target type here.
-	case string:
-		switch setConfMap[key].(type) {
-		case bool:
-			if bValue, err := strconv.ParseBool(value.(string)); err == nil {
-				setConfMap[key] = bValue
-			}
-		case int:
-			if iValue, err := strconv.ParseInt(value.(string), 10, 64); err == nil {
-				setConfMap[key] = iValue
-			}
-		case float64:
-			if fValue, err := strconv.ParseFloat(value.(string), 64); err == nil {
-				setConfMap[key] = fValue
-			}
-		default:
-			// Anything else will be added as it is (i.e. as a string)
-			setConfMap[key] = value
-		}
-	default:
-		// Anything else will be added as it is.
-		setConfMap[key] = value
-	}
-}
-
 // Update schema.TypeSet with new values comes from Proxmox API.
 // TODO: Maybe it's better to create a new Set instead add to current one.
-func updateDisksSet(
+func updateDevicesSet(
 	devicesSet *schema.Set,
 	devicesMap pxapi.QemuDevices,
 ) *schema.Set {
@@ -774,41 +746,35 @@ func updateDisksSet(
 		deviceID := setConfMap["id"].(int)
 		// Value type should be one of types allowed by Terraform schema types.
 		for key, value := range activeDevicesMap[deviceID] {
-			switch key {
-			case "size":
-				setConfMap[key] = convertDiskSize(value)
+			switch value.(type) {
+			// proxmox-api-go returns all device values as strings so convert them to the right target type here.
+			case string:
+				switch setConfMap[key].(type) {
+				case bool:
+					if bValue, err := strconv.ParseBool(value.(string)); err == nil {
+						setConfMap[key] = bValue
+					}
+				case int:
+					if iValue, err := strconv.ParseInt(value.(string), 10, 64); err == nil {
+						setConfMap[key] = iValue
+					}
+				case float64:
+					if fValue, err := strconv.ParseFloat(value.(string), 64); err == nil {
+						setConfMap[key] = fValue
+					}
+				default:
+					// Anything else will be added as it is (i.e. as a string)
+					setConfMap[key] = value
+				}
 			default:
-				genericTypeConversion(setConfMap, key, value)
+				// Anything else will be added as it is.
+				setConfMap[key] = value
 			}
-
 		}
 		devicesSet.Add(setConfMap)
 	}
 
-	log.Printf("[DEBUG] updateDisksSet result: %#v", *devicesSet)
-	return devicesSet
-}
-
-func updateNetworksSet(
-	devicesSet *schema.Set,
-	devicesMap pxapi.QemuDevices,
-) *schema.Set {
-
-	configDevicesMap := devicesSetToMap(devicesSet)
-	activeDevicesMap := updateDevicesDefaults(devicesMap, configDevicesMap)
-
-	for _, setConf := range devicesSet.List() {
-		devicesSet.Remove(setConf)
-		setConfMap := setConf.(map[string]interface{})
-		deviceID := setConfMap["id"].(int)
-		// Value type should be one of types allowed by Terraform schema types.
-		for key, value := range activeDevicesMap[deviceID] {
-			genericTypeConversion(setConfMap, key, value)
-		}
-		devicesSet.Add(setConfMap)
-	}
-
-	log.Printf("[DEBUG] updateNetworksSet result: %#v", *devicesSet)
+	log.Printf("[DEBUG] updateDevicesSet result: %#v", *devicesSet)
 	return devicesSet
 }
 
