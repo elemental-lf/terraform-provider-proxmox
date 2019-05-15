@@ -661,22 +661,22 @@ func resizeDisks(
 	vmr *pxapi.VmRef,
 	diskConfMap pxapi.QemuDevices,
 ) error {
-	clonedConfig, err := pxapi.NewConfigQemuFromApi(vmr, client)
+	oldConfig, err := pxapi.NewConfigQemuFromApi(vmr, client)
 	if err != nil {
 		return err
 	}
-	//log.Printf("%s", clonedConfig)
+	//log.Printf("%s", oldConfig)
 	for diskID, diskConf := range diskConfMap {
 		diskName := fmt.Sprintf("%v%v", diskConf["type"], diskID)
 
-		if _, diskExists := clonedConfig.QemuDisks[diskID]; !diskExists {
+		if _, diskExists := oldConfig.QemuDisks[diskID]; !diskExists {
 			return fmt.Errorf("Disk %s not present in current configuration.", diskName)
 		}
 
-		diskSize := convertDiskSize(diskConf["size"])
-		clonedDiskSize := convertDiskSize(clonedConfig.QemuDisks[diskID]["size"])
+		diskSize := diskSizeToGigaBytes(diskConf["size"].(string))
+		oldDiskSize := diskSizeToGigaBytes(oldConfig.QemuDisks[diskID]["size"].(string))
 
-		diffSize := int(math.Ceil(diskSize - clonedDiskSize))
+		diffSize := int(math.Ceil(diskSize - oldDiskSize))
 		if diffSize > 0 {
 			log.Printf("[DEBUG] resizing disk %s (+%dGB)", diskName, diffSize)
 			if _, err = client.ResizeQemuDisk(vmr, diskName, diffSize); err != nil {
@@ -703,31 +703,25 @@ func devicesSetToMap(devicesSet *schema.Set) pxapi.QemuDevices {
 	return devicesMap
 }
 
-func convertDiskSize(value interface{}) float64 {
+func diskSizeToGigaBytes(value string) float64 {
 
-	switch value.(type) {
-	case string:
-		sValue := strings.ToLower(value.(string))
-		fValue, _ := strconv.ParseFloat(strings.TrimRight(sValue, "kmgtpe"), 64)
+	fValue, _ := strconv.ParseFloat(strings.TrimRight(strings.ToLower(value), "kmgtpe"), 64)
 
-		unit := sValue[len(sValue) - 1:]
-		switch unit {
-		case "k":
-			fValue /= 1<<20
-		case "m":
-			fValue /= 1<<10
-		case "t":
-			fValue *= 1<<10
-		case "p":
-			fValue *= 1<<20
-		case "e":
-			fValue *= 1<<30
-		}
-
-		return fValue
-	default:
-		return value.(float64)
+	unit := value[len(value) - 1:]
+	switch unit {
+	case "k":
+		fValue /= 1<<20
+	case "m":
+		fValue /= 1<<10
+	case "t":
+		fValue *= 1<<10
+	case "p":
+		fValue *= 1<<20
+	case "e":
+		fValue *= 1<<30
 	}
+
+	return fValue
 }
 
 // Update schema.TypeSet with new values comes from Proxmox API.
