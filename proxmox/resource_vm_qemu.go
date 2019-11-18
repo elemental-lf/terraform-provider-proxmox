@@ -22,7 +22,7 @@ func resourceVmQemu() *schema.Resource {
 		Update: resourceVmQemuUpdate,
 		Delete: resourceVmQemuDelete,
 		Importer: &schema.ResourceImporter{
-			State: resourceVmQemuImport,
+			State: schema.ImportStatePassthrough,
 		},
 
 		Schema: map[string]*schema.Schema{
@@ -47,6 +47,19 @@ func resourceVmQemu() *schema.Resource {
 				Optional: true,
 				Default:  true,
 			},
+			"boot": {
+				Type:     schema.TypeString,
+				Optional: true,
+				Default:  "cdn",
+			},
+			"bootdisk": {
+				Type:     schema.TypeString,
+				Optional: true,
+			},
+			"agent": {
+				Type:     schema.TypeString,
+				Optional: true,
+			},
 			"iso": {
 				Type:     schema.TypeString,
 				Optional: true,
@@ -57,22 +70,61 @@ func resourceVmQemu() *schema.Resource {
 				Optional: true,
 				ForceNew: true,
 			},
+			"full_clone": {
+				Type:     schema.TypeBool,
+				Optional: true,
+				ForceNew: true,
+				Default:  true,
+			},
+			"hastate": {
+				Type:     schema.TypeString,
+				Optional: true,
+			},
 			"qemu_os": {
 				Type:     schema.TypeString,
 				Optional: true,
 				Default:  "l26",
+				DiffSuppressFunc: func(k, old, new string, d *schema.ResourceData) bool {
+					if new == "l26" {
+						return len(d.Get("clone").(string)) > 0 // the cloned source may have a different os, which we shoud leave alone
+					}
+					return strings.TrimSpace(old) == strings.TrimSpace(new)
+				},
 			},
 			"memory": {
 				Type:     schema.TypeInt,
-				Required: true,
+				Optional: true,
+				Default:  512,
 			},
 			"cores": {
 				Type:     schema.TypeInt,
-				Required: true,
+				Optional: true,
+				Default:  1,
 			},
 			"sockets": {
 				Type:     schema.TypeInt,
-				Required: true,
+				Optional: true,
+				Default:  1,
+			},
+			"cpu": {
+				Type:     schema.TypeString,
+				Optional: true,
+				Default:  "host",
+			},
+			"numa": {
+				Type:     schema.TypeBool,
+				Optional: true,
+				Default:  false,
+			},
+			"hotplug": {
+				Type:     schema.TypeString,
+				Optional: true,
+				Default:  "network,disk,usb",
+			},
+			"scsihw": {
+				Type:     schema.TypeString,
+				Optional: true,
+				Default:  "",
 			},
 			"network": &schema.Schema{
 				Type:          schema.TypeSet,
@@ -189,11 +241,6 @@ func resourceVmQemu() *schema.Resource {
 					},
 				},
 			},
-			"scsi_hardware": &schema.Schema{
-				Type:     schema.TypeString,
-				Optional: true,
-				Default:  "lsi",
-			},
 			// Deprecated single disk config.
 			"disk_gb": {
 				Type:       schema.TypeFloat,
@@ -251,6 +298,22 @@ func resourceVmQemu() *schema.Resource {
 					return strings.TrimSpace(old) == strings.TrimSpace(new)
 				},
 			},
+			"serial": &schema.Schema{
+				Type:     schema.TypeSet,
+				Optional: true,
+				Elem: &schema.Resource{
+					Schema: map[string]*schema.Schema{
+						"id": &schema.Schema{
+							Type:     schema.TypeInt,
+							Required: true,
+						},
+						"type": &schema.Schema{
+							Type:     schema.TypeString,
+							Required: true,
+						},
+					},
+				},
+			},
 			"os_type": {
 				Type:     schema.TypeString,
 				Optional: true,
@@ -284,10 +347,6 @@ func resourceVmQemu() *schema.Resource {
 				Type:     schema.TypeBool,
 				Optional: true,
 				Default:  false,
-			},
-			"agent": {
-				Type:     schema.TypeString,
-				Optional: true,
 			},
 			"ci_wait": { // how long to wait before provision
 				Type:     schema.TypeInt,
@@ -331,11 +390,27 @@ func resourceVmQemu() *schema.Resource {
 				Type:     schema.TypeString,
 				Optional: true,
 			},
+			"ipconfig2": {
+				Type:     schema.TypeString,
+				Optional: true,
+			},
 			"preprovision": {
 				Type:          schema.TypeBool,
 				Optional:      true,
 				Default:       true,
 				ConflictsWith: []string{"ssh_forward_ip", "ssh_user", "ssh_private_key", "os_type", "os_network_config"},
+			},
+			"pool": {
+				Type:     schema.TypeString,
+				Optional: true,
+			},
+			"ssh_host": {
+				Type:     schema.TypeString,
+				Computed: true,
+			},
+			"ssh_port": {
+				Type:     schema.TypeString,
+				Computed: true,
 			},
 		},
 	}
@@ -349,21 +424,32 @@ func resourceVmQemuCreate(d *schema.ResourceData, meta interface{}) error {
 	client := pconf.Client
 	vmName := d.Get("name").(string)
 	networks := d.Get("network").(*schema.Set)
-	qemuNetworks := devicesSetToMap(networks)
+	qemuNetworks := DevicesSetToMap(networks)
 	disks := d.Get("disk").(*schema.Set)
-	qemuDisks := devicesSetToMap(disks)
+	qemuDisks := DevicesSetToMap(disks)
+	serials := d.Get("serial").(*schema.Set)
+	qemuSerials := DevicesSetToMap(serials)
 
 	config := pxapi.ConfigQemu{
-		Name:             vmName,
-		Description:      d.Get("desc").(string),
-		Onboot:           d.Get("onboot").(bool),
-		Memory:           d.Get("memory").(int),
-		QemuCores:        d.Get("cores").(int),
-		QemuSockets:      d.Get("sockets").(int),
-		QemuOs:           d.Get("qemu_os").(string),
-		QemuNetworks:     qemuNetworks,
-		QemuDisks:        qemuDisks,
-		QemuScsiHardware: d.Get("scsi_hardware").(string),
+		Name:         vmName,
+		Description:  d.Get("desc").(string),
+		Pool:         d.Get("pool").(string),
+		Onboot:       d.Get("onboot").(bool),
+		Boot:         d.Get("boot").(string),
+		BootDisk:     d.Get("bootdisk").(string),
+		Agent:        d.Get("agent").(string),
+		Memory:       d.Get("memory").(int),
+		QemuCores:    d.Get("cores").(int),
+		QemuSockets:  d.Get("sockets").(int),
+		QemuCpu:      d.Get("cpu").(string),
+		QemuNuma:     d.Get("numa").(bool),
+		Hotplug:      d.Get("hotplug").(string),
+		Scsihw:       d.Get("scsihw").(string),
+		HaState:      d.Get("hastate").(string),
+		QemuOs:       d.Get("qemu_os").(string),
+		QemuNetworks: qemuNetworks,
+		QemuDisks:    qemuDisks,
+		QemuSerials:  qemuSerials,
 		// Cloud-init.
 		CIuser:       d.Get("ciuser").(string),
 		CIpassword:   d.Get("cipassword").(string),
@@ -372,7 +458,7 @@ func resourceVmQemuCreate(d *schema.ResourceData, meta interface{}) error {
 		Sshkeys:      d.Get("sshkeys").(string),
 		Ipconfig0:    d.Get("ipconfig0").(string),
 		Ipconfig1:    d.Get("ipconfig1").(string),
-		Agent:        d.Get("agent").(string),
+		Ipconfig2:    d.Get("ipconfig2").(string),
 		// Deprecated single disk config.
 		Storage:  d.Get("storage").(string),
 		DiskSize: d.Get("disk_gb").(float64),
@@ -387,6 +473,7 @@ func resourceVmQemuCreate(d *schema.ResourceData, meta interface{}) error {
 
 	forceCreate := d.Get("force_create").(bool)
 	targetNode := d.Get("target_node").(string)
+	pool := d.Get("pool").(string)
 
 	if dupVmr != nil && forceCreate {
 		pmParallelEnd(pconf)
@@ -407,9 +494,20 @@ func resourceVmQemuCreate(d *schema.ResourceData, meta interface{}) error {
 		}
 		vmr = pxapi.NewVmRef(nextid)
 
+		// set target node and pool
 		vmr.SetNode(targetNode)
+		if pool != "" {
+			vmr.SetPool(pool)
+		}
+
 		// check if ISO or clone
 		if d.Get("clone").(string) != "" {
+			fullClone := 1
+			if !d.Get("full_clone").(bool) {
+				fullClone = 0
+			}
+			config.FullClone = &fullClone
+
 			sourceVmr, err := client.GetVmRefByName(d.Get("clone").(string))
 			if err != nil {
 				pmParallelEnd(pconf)
@@ -418,6 +516,8 @@ func resourceVmQemuCreate(d *schema.ResourceData, meta interface{}) error {
 			log.Print("[DEBUG] cloning VM")
 			err = config.CloneVm(sourceVmr, vmr, client)
 			if err != nil {
+				// Set the id because when update config fail the vm is still created
+				d.SetId(resourceId(targetNode, "qemu", vmr.VmId()))
 				pmParallelEnd(pconf)
 				return err
 			}
@@ -448,6 +548,8 @@ func resourceVmQemuCreate(d *schema.ResourceData, meta interface{}) error {
 
 		err := config.UpdateConfig(vmr, client)
 		if err != nil {
+			// Set the id because when update config fail the vm is still created
+			d.SetId(resourceId(targetNode, "qemu", vmr.VmId()))
 			pmParallelEnd(pconf)
 			return err
 		}
@@ -500,21 +602,32 @@ func resourceVmQemuUpdate(d *schema.ResourceData, meta interface{}) error {
 		return err
 	}
 	configDisksSet := d.Get("disk").(*schema.Set)
-	qemuDisks := devicesSetToMap(configDisksSet)
+	qemuDisks := DevicesSetToMap(configDisksSet)
 	configNetworksSet := d.Get("network").(*schema.Set)
-	qemuNetworks := devicesSetToMap(configNetworksSet)
+	qemuNetworks := DevicesSetToMap(configNetworksSet)
+	serials := d.Get("serial").(*schema.Set)
+	qemuSerials := DevicesSetToMap(serials)
 
 	config := pxapi.ConfigQemu{
-		Name:             d.Get("name").(string),
-		Description:      d.Get("desc").(string),
-		Onboot:           d.Get("onboot").(bool),
-		Memory:           d.Get("memory").(int),
-		QemuCores:        d.Get("cores").(int),
-		QemuSockets:      d.Get("sockets").(int),
-		QemuOs:           d.Get("qemu_os").(string),
-		QemuNetworks:     qemuNetworks,
-		QemuDisks:        qemuDisks,
-		QemuScsiHardware: d.Get("scsi_hardware").(string),
+		Name:         d.Get("name").(string),
+		Description:  d.Get("desc").(string),
+		Pool:         d.Get("pool").(string),
+		Onboot:       d.Get("onboot").(bool),
+		Boot:         d.Get("boot").(string),
+		BootDisk:     d.Get("bootdisk").(string),
+		Agent:        d.Get("agent").(string),
+		Memory:       d.Get("memory").(int),
+		QemuCores:    d.Get("cores").(int),
+		QemuSockets:  d.Get("sockets").(int),
+		QemuCpu:      d.Get("cpu").(string),
+		QemuNuma:     d.Get("numa").(bool),
+		Hotplug:      d.Get("hotplug").(string),
+		Scsihw:       d.Get("scsihw").(string),
+		HaState:      d.Get("hastate").(string),
+		QemuOs:       d.Get("qemu_os").(string),
+		QemuNetworks: qemuNetworks,
+		QemuDisks:    qemuDisks,
+		QemuSerials:  qemuSerials,
 		// Cloud-init.
 		CIuser:       d.Get("ciuser").(string),
 		CIpassword:   d.Get("cipassword").(string),
@@ -523,7 +636,7 @@ func resourceVmQemuUpdate(d *schema.ResourceData, meta interface{}) error {
 		Sshkeys:      d.Get("sshkeys").(string),
 		Ipconfig0:    d.Get("ipconfig0").(string),
 		Ipconfig1:    d.Get("ipconfig1").(string),
-		Agent:        d.Get("agent").(string),
+		Ipconfig2:    d.Get("ipconfig2").(string),
 		// Deprecated single disk config.
 		Storage:  d.Get("storage").(string),
 		DiskSize: d.Get("disk_gb").(float64),
@@ -578,6 +691,7 @@ func resourceVmQemuRead(d *schema.ResourceData, meta interface{}) error {
 	_, _, vmID, err := parseResourceId(d.Id())
 	if err != nil {
 		pmParallelEnd(pconf)
+		d.SetId("")
 		return err
 	}
 	vmr := pxapi.NewVmRef(vmID)
@@ -595,10 +709,19 @@ func resourceVmQemuRead(d *schema.ResourceData, meta interface{}) error {
 	d.Set("target_node", vmr.Node())
 	d.Set("name", config.Name)
 	d.Set("desc", config.Description)
+	d.Set("pool", config.Pool)
 	d.Set("onboot", config.Onboot)
+	d.Set("boot", config.Boot)
+	d.Set("bootdisk", config.BootDisk)
+	d.Set("agent", config.Agent)
 	d.Set("memory", config.Memory)
 	d.Set("cores", config.QemuCores)
 	d.Set("sockets", config.QemuSockets)
+	d.Set("cpu", config.QemuCpu)
+	d.Set("numa", config.QemuNuma)
+	d.Set("hotplug", config.Hotplug)
+	d.Set("scsihw", config.Scsihw)
+	d.Set("hastate", vmr.HaState())
 	d.Set("qemu_os", config.QemuOs)
 	// Cloud-init.
 	d.Set("ciuser", config.CIuser)
@@ -608,14 +731,14 @@ func resourceVmQemuRead(d *schema.ResourceData, meta interface{}) error {
 	d.Set("sshkeys", config.Sshkeys)
 	d.Set("ipconfig0", config.Ipconfig0)
 	d.Set("ipconfig1", config.Ipconfig1)
-	d.Set("agent", config.Agent)
+	d.Set("ipconfig2", config.Ipconfig2)
 	// Disks.
 	configDisksSet := d.Get("disk").(*schema.Set)
-	activeDisksSet := updateDevicesSet(configDisksSet, config.QemuDisks)
+	activeDisksSet := UpdateDevicesSet(configDisksSet, config.QemuDisks)
 	d.Set("disk", activeDisksSet)
 	// Networks.
 	configNetworksSet := d.Get("network").(*schema.Set)
-	activeNetworksSet := updateDevicesSet(configNetworksSet, config.QemuNetworks)
+	activeNetworksSet := UpdateDevicesSet(configNetworksSet, config.QemuNetworks)
 	d.Set("network", activeNetworksSet)
 	// Deprecated single disk config.
 	d.Set("storage", config.Storage)
@@ -626,15 +749,14 @@ func resourceVmQemuRead(d *schema.ResourceData, meta interface{}) error {
 	d.Set("bridge", config.QemuBrige)
 	d.Set("vlan", config.QemuVlanTag)
 	d.Set("mac", config.QemuMacAddr)
+	d.Set("pool", vmr.Pool())
+	//Serials
+	configSerialsSet := d.Get("serial").(*schema.Set)
+	activeSerialSet := UpdateDevicesSet(configSerialsSet, config.QemuSerials)
+	d.Set("serial", activeSerialSet)
 
 	pmParallelEnd(pconf)
 	return nil
-}
-
-func resourceVmQemuImport(d *schema.ResourceData, meta interface{}) ([]*schema.ResourceData, error) {
-	// TODO: research proper import
-	err := resourceVmQemuRead(d, meta)
-	return []*schema.ResourceData{d}, err
 }
 
 func resourceVmQemuDelete(d *schema.ResourceData, meta interface{}) error {
@@ -689,7 +811,7 @@ func resizeDisks(
 
 // Converting from schema.TypeSet to map of id and conf for each device,
 // which will be sent to Proxmox API.
-func devicesSetToMap(devicesSet *schema.Set) pxapi.QemuDevices {
+func DevicesSetToMap(devicesSet *schema.Set) pxapi.QemuDevices {
 
 	devicesMap := pxapi.QemuDevices{}
 
@@ -726,12 +848,13 @@ func diskSizeToGigaBytes(value string) float64 {
 
 // Update schema.TypeSet with new values comes from Proxmox API.
 // TODO: Maybe it's better to create a new Set instead add to current one.
-func updateDevicesSet(
+func UpdateDevicesSet(
 	devicesSet *schema.Set,
 	devicesMap pxapi.QemuDevices,
 ) *schema.Set {
 
-	configDevicesMap := devicesSetToMap(devicesSet)
+	configDevicesMap := DevicesSetToMap(devicesSet)
+
 	activeDevicesMap := updateDevicesDefaults(devicesMap, configDevicesMap)
 
 	for _, setConf := range devicesSet.List() {
@@ -812,6 +935,12 @@ func initConnInfo(
 			ipMatch := rxIPconfig.FindStringSubmatch(d.Get("ipconfig0").(string))
 			sshHost = ipMatch[1]
 		}
+		// Check if we got a speficied port
+		if strings.Contains(sshHost, ":") {
+			sshParts := strings.Split(sshHost, ":")
+			sshHost = sshParts[0]
+			sshPort = sshParts[1]
+		}
 	} else {
 		log.Print("[DEBUG] setting up SSH forward")
 		sshPort, err = pxapi.SshForwardUsernet(vmr, client)
@@ -825,6 +954,11 @@ func initConnInfo(
 	// Done with proxmox API, end parallel and do the SSH things
 	pmParallelEnd(pconf)
 
+	// Optional convience attributes for provisioners
+	d.Set("ssh_host", sshHost)
+	d.Set("ssh_port", sshPort)
+
+	// This connection INFO is longer shared up to the providers :-(
 	d.SetConnInfo(map[string]string{
 		"type":            "ssh",
 		"host":            sshHost,
@@ -834,6 +968,7 @@ func initConnInfo(
 		"pm_api_url":      client.ApiUrl,
 		"pm_user":         client.Username,
 		"pm_password":     client.Password,
+		"pm_otp":          client.Otp,
 		"pm_tls_insecure": "true", // TODO - pass pm_tls_insecure state around, but if we made it this far, default insecure
 	})
 	return nil
