@@ -412,6 +412,11 @@ func resourceVmQemu() *schema.Resource {
 				Type:     schema.TypeString,
 				Computed: true,
 			},
+			"duplicate_name_check": {
+				Type:          schema.TypeBool,
+				Optional:      true,
+				Default:       true,
+			},
 		},
 	}
 }
@@ -468,8 +473,11 @@ func resourceVmQemuCreate(d *schema.ResourceData, meta interface{}) error {
 		QemuVlanTag:  d.Get("vlan").(int),
 		QemuMacAddr:  d.Get("mac").(string),
 	}
-	log.Print("[DEBUG] checking for duplicate name")
-	dupVmr, _ := client.GetVmRefByName(vmName)
+	dupVmr := (*pxapi.VmRef)(nil)
+	if d.Get("duplicate_name_check").(bool) {
+		log.Print("[DEBUG] checking for duplicate name")
+		dupVmr, _ = client.GetVmRefByName(vmName)
+	}
 
 	forceCreate := d.Get("force_create").(bool)
 	targetNode := d.Get("target_node").(string)
