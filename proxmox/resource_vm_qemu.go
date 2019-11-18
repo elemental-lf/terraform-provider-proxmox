@@ -417,6 +417,11 @@ func resourceVmQemu() *schema.Resource {
 				Optional:      true,
 				Default:       true,
 			},
+			"init_conn_info": {
+				Type:          schema.TypeBool,
+				Optional:      true,
+				Default:       true,
+			},
 		},
 	}
 }
@@ -583,6 +588,7 @@ func resourceVmQemuCreate(d *schema.ResourceData, meta interface{}) error {
 		return err
 	}
 
+	// initConnInfo will call pmParallelEnd as a side effect
 	err = initConnInfo(d, pconf, client, vmr, &config)
 	if err != nil {
 		return err
@@ -679,6 +685,7 @@ func resourceVmQemuUpdate(d *schema.ResourceData, meta interface{}) error {
 		return err
 	}
 
+	// initConnInfo will call pmParallelEnd as a side effect
 	err = initConnInfo(d, pconf, client, vmr, &config)
 	if err != nil {
 		return err
@@ -930,6 +937,11 @@ func initConnInfo(
 	client *pxapi.Client,
 	vmr *pxapi.VmRef,
 	config *pxapi.ConfigQemu) error {
+
+	if d.Get("init_conn_info").(bool) {
+		pmParallelEnd(pconf)
+		return nil
+	}
 
 	sshPort := "22"
 	sshHost := ""
