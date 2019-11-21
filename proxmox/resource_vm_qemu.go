@@ -14,7 +14,7 @@ import (
 	"github.com/hashicorp/terraform/helper/schema"
 )
 
-func resourceVmQemu() *schema.Resource {
+func resourceVmQemuV1() *schema.Resource {
 	*pxapi.Debug = true
 	return &schema.Resource{
 		Create: resourceVmQemuCreate,
@@ -423,7 +423,431 @@ func resourceVmQemu() *schema.Resource {
 				Default:       true,
 			},
 		},
+		SchemaVersion: 1,
+		StateUpgraders: []schema.StateUpgrader{
+			{
+				Type:    resourceVmQemuV0().CoreConfigSchema().ImpliedType(),
+				Upgrade: resourceVmQemuStateUpgradeV0,
+				Version: 0,
+			},
+		},
 	}
+}
+
+func resourceVmQemuV0() *schema.Resource {
+	// I would have liked to make a copy of the V1 resource and just change it.
+	// But for whatever reason (probably my limited knowledge of Go), Terraform hung when starting the plugin
+	// when I made s shallow copy of the schema from V1 and changed it.
+	return &schema.Resource{
+		Schema: map[string]*schema.Schema{
+			"name": {
+				Type:     schema.TypeString,
+				Required: true,
+			},
+			"desc": {
+				Type:     schema.TypeString,
+				Optional: true,
+				DiffSuppressFunc: func(k, old, new string, d *schema.ResourceData) bool {
+					return strings.TrimSpace(old) == strings.TrimSpace(new)
+				},
+			},
+			"target_node": {
+				Type:     schema.TypeString,
+				Required: true,
+				ForceNew: true,
+			},
+			"onboot": {
+				Type:     schema.TypeBool,
+				Optional: true,
+				Default:  true,
+			},
+			"boot": {
+				Type:     schema.TypeString,
+				Optional: true,
+				Default:  "cdn",
+			},
+			"bootdisk": {
+				Type:     schema.TypeString,
+				Optional: true,
+			},
+			"agent": {
+				Type:     schema.TypeString,
+				Optional: true,
+			},
+			"iso": {
+				Type:     schema.TypeString,
+				Optional: true,
+				ForceNew: true,
+			},
+			"clone": {
+				Type:     schema.TypeString,
+				Optional: true,
+				ForceNew: true,
+			},
+			"full_clone": {
+				Type:     schema.TypeBool,
+				Optional: true,
+				ForceNew: true,
+				Default:  true,
+			},
+			"hastate": {
+				Type:     schema.TypeString,
+				Optional: true,
+			},
+			"qemu_os": {
+				Type:     schema.TypeString,
+				Optional: true,
+				Default:  "l26",
+				DiffSuppressFunc: func(k, old, new string, d *schema.ResourceData) bool {
+					if new == "l26" {
+						return len(d.Get("clone").(string)) > 0 // the cloned source may have a different os, which we shoud leave alone
+					}
+					return strings.TrimSpace(old) == strings.TrimSpace(new)
+				},
+			},
+			"memory": {
+				Type:     schema.TypeInt,
+				Optional: true,
+				Default:  512,
+			},
+			"cores": {
+				Type:     schema.TypeInt,
+				Optional: true,
+				Default:  1,
+			},
+			"sockets": {
+				Type:     schema.TypeInt,
+				Optional: true,
+				Default:  1,
+			},
+			"cpu": {
+				Type:     schema.TypeString,
+				Optional: true,
+				Default:  "host",
+			},
+			"numa": {
+				Type:     schema.TypeBool,
+				Optional: true,
+				Default:  false,
+			},
+			"hotplug": {
+				Type:     schema.TypeString,
+				Optional: true,
+				Default:  "network,disk,usb",
+			},
+			"scsi_hardware": {
+				Type:     schema.TypeString,
+				Optional: true,
+				Default:  "",
+			},
+			"network": &schema.Schema{
+				Type:          schema.TypeSet,
+				Optional:      true,
+				ConflictsWith: []string{"nic", "bridge", "vlan", "mac"},
+				Elem: &schema.Resource{
+					Schema: map[string]*schema.Schema{
+						"id": &schema.Schema{
+							Type:     schema.TypeInt,
+							Required: true,
+						},
+						"model": &schema.Schema{
+							Type:     schema.TypeString,
+							Required: true,
+						},
+						"macaddr": &schema.Schema{
+							// TODO: Find a way to set MAC address in .tf config.
+							Type:     schema.TypeString,
+							Optional: true,
+							DiffSuppressFunc: func(k, old, new string, d *schema.ResourceData) bool {
+								if new == "" {
+									return true // macaddr auto-generates and its ok
+								}
+								return strings.TrimSpace(old) == strings.TrimSpace(new)
+							},
+						},
+						"bridge": &schema.Schema{
+							Type:     schema.TypeString,
+							Optional: true,
+							Default:  "nat",
+						},
+						"tag": &schema.Schema{
+							Type:        schema.TypeInt,
+							Optional:    true,
+							Description: "VLAN tag.",
+							Default:     -1,
+						},
+						"firewall": &schema.Schema{
+							Type:     schema.TypeBool,
+							Optional: true,
+							Default:  false,
+						},
+						"rate": &schema.Schema{
+							Type:     schema.TypeInt,
+							Optional: true,
+							Default:  -1,
+						},
+						"queues": &schema.Schema{
+							Type:     schema.TypeInt,
+							Optional: true,
+							Default:  -1,
+						},
+						"link_down": &schema.Schema{
+							Type:     schema.TypeBool,
+							Optional: true,
+							Default:  false,
+						},
+					},
+				},
+			},
+			"disk": &schema.Schema{
+				Type:          schema.TypeSet,
+				Optional:      true,
+				ConflictsWith: []string{"disk_gb", "storage", "storage_type"},
+				Elem: &schema.Resource{
+					Schema: map[string]*schema.Schema{
+						"id": &schema.Schema{
+							Type:     schema.TypeInt,
+							Required: true,
+						},
+						"type": &schema.Schema{
+							Type:     schema.TypeString,
+							Required: true,
+						},
+						"storage": &schema.Schema{
+							Type:     schema.TypeString,
+							Required: true,
+						},
+						"storage_type": &schema.Schema{
+							Type:        schema.TypeString,
+							Optional:    true,
+							Default:     "dir",
+							Description: "One of PVE types as described: https://pve.proxmox.com/wiki/Storage",
+						},
+						"size": &schema.Schema{
+							Type:     schema.TypeString,
+							Required: true,
+						},
+						"format": &schema.Schema{
+							Type:     schema.TypeString,
+							Optional: true,
+							Default:  "raw",
+						},
+						"cache": &schema.Schema{
+							Type:     schema.TypeString,
+							Optional: true,
+							Default:  "none",
+						},
+						"backup": &schema.Schema{
+							Type:     schema.TypeBool,
+							Optional: true,
+							Default:  false,
+						},
+						"iothread": &schema.Schema{
+							Type:     schema.TypeBool,
+							Optional: true,
+							Default:  false,
+						},
+						"replicate": &schema.Schema{
+							Type:     schema.TypeBool,
+							Optional: true,
+							Default:  false,
+						},
+					},
+				},
+			},
+			// Deprecated single disk config.
+			"disk_gb": {
+				Type:       schema.TypeFloat,
+				Deprecated: "Use `disk.size` instead",
+				Optional:   true,
+				DiffSuppressFunc: func(k, old, new string, d *schema.ResourceData) bool {
+					// bigger ok
+					oldf, _ := strconv.ParseFloat(old, 64)
+					newf, _ := strconv.ParseFloat(new, 64)
+					return oldf >= newf
+				},
+			},
+			"storage": {
+				Type:       schema.TypeString,
+				Deprecated: "Use `disk.storage` instead",
+				Optional:   true,
+			},
+			"storage_type": {
+				Type:       schema.TypeString,
+				Deprecated: "Use `disk.type` instead",
+				Optional:   true,
+				ForceNew:   false,
+				DiffSuppressFunc: func(k, old, new string, d *schema.ResourceData) bool {
+					if new == "" {
+						return true // empty template ok
+					}
+					return strings.TrimSpace(old) == strings.TrimSpace(new)
+				},
+			},
+			// Deprecated single nic config.
+			"nic": {
+				Type:       schema.TypeString,
+				Deprecated: "Use `network` instead",
+				Optional:   true,
+			},
+			"bridge": {
+				Type:       schema.TypeString,
+				Deprecated: "Use `network.bridge` instead",
+				Optional:   true,
+			},
+			"vlan": {
+				Type:       schema.TypeInt,
+				Deprecated: "Use `network.tag` instead",
+				Optional:   true,
+				Default:    -1,
+			},
+			"mac": {
+				Type:       schema.TypeString,
+				Deprecated: "Use `network.macaddr` to access the auto generated MAC address",
+				Optional:   true,
+				DiffSuppressFunc: func(k, old, new string, d *schema.ResourceData) bool {
+					if new == "" {
+						return true // macaddr auto-generates and its ok
+					}
+					return strings.TrimSpace(old) == strings.TrimSpace(new)
+				},
+			},
+			"serial": &schema.Schema{
+				Type:     schema.TypeSet,
+				Optional: true,
+				Elem: &schema.Resource{
+					Schema: map[string]*schema.Schema{
+						"id": &schema.Schema{
+							Type:     schema.TypeInt,
+							Required: true,
+						},
+						"type": &schema.Schema{
+							Type:     schema.TypeString,
+							Required: true,
+						},
+					},
+				},
+			},
+			"os_type": {
+				Type:     schema.TypeString,
+				Optional: true,
+			},
+			"os_network_config": {
+				Type:     schema.TypeString,
+				Optional: true,
+				ForceNew: true,
+				DiffSuppressFunc: func(k, old, new string, d *schema.ResourceData) bool {
+					return strings.TrimSpace(old) == strings.TrimSpace(new)
+				},
+			},
+			"ssh_forward_ip": {
+				Type:     schema.TypeString,
+				Optional: true,
+			},
+			"ssh_user": {
+				Type:     schema.TypeString,
+				Optional: true,
+				ForceNew: true,
+			},
+			"ssh_private_key": {
+				Type:      schema.TypeString,
+				Optional:  true,
+				Sensitive: true,
+				DiffSuppressFunc: func(k, old, new string, d *schema.ResourceData) bool {
+					return strings.TrimSpace(old) == strings.TrimSpace(new)
+				},
+			},
+			"force_create": {
+				Type:     schema.TypeBool,
+				Optional: true,
+				Default:  false,
+			},
+			"ci_wait": { // how long to wait before provision
+				Type:     schema.TypeInt,
+				Optional: true,
+				Default:  30,
+				DiffSuppressFunc: func(k, old, new string, d *schema.ResourceData) bool {
+					if old == "" {
+						return true // old empty ok
+					}
+					return strings.TrimSpace(old) == strings.TrimSpace(new)
+				},
+			},
+			"ciuser": {
+				Type:     schema.TypeString,
+				Optional: true,
+			},
+			"cipassword": {
+				Type:     schema.TypeString,
+				Optional: true,
+			},
+			"searchdomain": {
+				Type:     schema.TypeString,
+				Optional: true,
+			},
+			"nameserver": {
+				Type:     schema.TypeString,
+				Optional: true,
+			},
+			"sshkeys": {
+				Type:     schema.TypeString,
+				Optional: true,
+				DiffSuppressFunc: func(k, old, new string, d *schema.ResourceData) bool {
+					return strings.TrimSpace(old) == strings.TrimSpace(new)
+				},
+			},
+			"ipconfig0": {
+				Type:     schema.TypeString,
+				Optional: true,
+			},
+			"ipconfig1": {
+				Type:     schema.TypeString,
+				Optional: true,
+			},
+			"ipconfig2": {
+				Type:     schema.TypeString,
+				Optional: true,
+			},
+			"preprovision": {
+				Type:          schema.TypeBool,
+				Optional:      true,
+				Default:       true,
+				ConflictsWith: []string{"ssh_forward_ip", "ssh_user", "ssh_private_key", "os_type", "os_network_config"},
+			},
+			"pool": {
+				Type:     schema.TypeString,
+				Optional: true,
+			},
+			"ssh_host": {
+				Type:     schema.TypeString,
+				Computed: true,
+			},
+			"ssh_port": {
+				Type:     schema.TypeString,
+				Computed: true,
+			},
+			"duplicate_name_check": {
+				Type:          schema.TypeBool,
+				Optional:      true,
+				Default:       true,
+			},
+			"init_conn_info": {
+				Type:          schema.TypeBool,
+				Optional:      true,
+				Default:       true,
+			},
+		},
+	}
+}
+
+func resourceVmQemuStateUpgradeV0(rawState map[string]interface{}, meta interface{}) (map[string]interface{}, error) {
+	rawState["scsihw"] = rawState["scsi_hardware"]
+	delete(rawState, "scsi_hardware")
+
+	// If not set, this would force a recreation of the resource.
+	rawState["full_clone"] = true
+
+	return rawState, nil
 }
 
 var rxIPconfig = regexp.MustCompile("ip6?=([0-9a-fA-F:\\.]+)")
