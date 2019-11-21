@@ -55,6 +55,7 @@ func resourceVmQemuV1() *schema.Resource {
 			"bootdisk": {
 				Type:     schema.TypeString,
 				Optional: true,
+				Default:  "scsi0",
 			},
 			"agent": {
 				Type:     schema.TypeString,
