@@ -2,6 +2,7 @@ package proxmox
 
 import (
 	"fmt"
+	"github.com/hashicorp/terraform/helper/validation"
 	"log"
 	"math"
 	"path"
@@ -238,6 +239,11 @@ func resourceVmQemuV1() *schema.Resource {
 							Type:     schema.TypeBool,
 							Optional: true,
 							Default:  false,
+						},
+						"serial": &schema.Schema{
+							Type:     schema.TypeString,
+							Optional: true,
+							ValidateFunc: validation.StringLenBetween(1, 20),
 						},
 					},
 				},
