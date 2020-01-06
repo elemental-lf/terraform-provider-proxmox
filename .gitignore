@@ -1,2 +1,6 @@
+.idea
+examples/*_override.tf
+
 *~*
 *.bak
+bin
